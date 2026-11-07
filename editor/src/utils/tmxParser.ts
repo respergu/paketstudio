@@ -1,0 +1,262 @@
+import type { TmxData, TmxTileset, TmxLayer, TmxObject } from '../types';
+import { MIN_OBJECT_ID, MAX_OBJECT_ID, PLAYER_OBJECT_ID } from '../constants';
+
+/**
+ * Parses an XML string representing a Tiled .tmx map into structured TmxData.
+ */
+export function parseTmxXml(xmlString: string): TmxData {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xmlString, 'application/xml');
+
+  const parserError = doc.querySelector('parsererror');
+  if (parserError) {
+    throw new Error(`Invalid TMX XML: ${parserError.textContent}`);
+  }
+
+  const mapEl = doc.querySelector('map');
+  if (!mapEl) {
+    throw new Error('Missing <map> root element in TMX file');
+  }
+
+  const width = parseInt(mapEl.getAttribute('width') || '16', 10);
+  const height = parseInt(mapEl.getAttribute('height') || '11', 10);
+  const tilewidth = parseInt(mapEl.getAttribute('tilewidth') || '8', 10);
+  const tileheight = parseInt(mapEl.getAttribute('tileheight') || '8', 10);
+
+  // Parse Tilesets
+  const tilesets: TmxTileset[] = [];
+  const tilesetEls = doc.querySelectorAll('tileset');
+  tilesetEls.forEach(el => {
+    const firstgid = parseInt(el.getAttribute('firstgid') || '1', 10);
+    const name = el.getAttribute('name') || '';
+    const tw = parseInt(el.getAttribute('tilewidth') || `${tilewidth}`, 10);
+    const th = parseInt(el.getAttribute('tileheight') || `${tileheight}`, 10);
+    const tilecount = parseInt(el.getAttribute('tilecount') || '0', 10);
+    const columns = parseInt(el.getAttribute('columns') || '0', 10);
+
+    const imgEl = el.querySelector('image');
+    const imageSource = imgEl ? (imgEl.getAttribute('source') || '') : '';
+    const imageWidth = imgEl ? parseInt(imgEl.getAttribute('width') || '0', 10) : 0;
+    const imageHeight = imgEl ? parseInt(imgEl.getAttribute('height') || '0', 10) : 0;
+
+    tilesets.push({
+      firstgid,
+      name,
+      tilewidth: tw,
+      tileheight: th,
+      tilecount,
+      columns,
+      image: {
+        source: imageSource,
+        width: imageWidth,
+        height: imageHeight
+      }
+    });
+  });
+
+  // Parse Tile Layers
+  const layers: TmxLayer[] = [];
+  const layerEls = doc.querySelectorAll('layer');
+  layerEls.forEach(el => {
+    const name = el.getAttribute('name') || '';
+    const lw = parseInt(el.getAttribute('width') || `${width}`, 10);
+    const lh = parseInt(el.getAttribute('height') || `${height}`, 10);
+    const visibleAttr = el.getAttribute('visible');
+    const visible = visibleAttr !== '0';
+
+    const dataEl = el.querySelector('data');
+    const rawData = dataEl ? (dataEl.textContent || '') : '';
+
+    // CSV decoding
+    const data: number[] = rawData
+      .split(',')
+      .map(s => parseInt(s.trim(), 10))
+      .filter(n => !isNaN(n));
+
+    layers.push({
+      name,
+      width: lw,
+      height: lh,
+      data,
+      visible
+    });
+  });
+
+  // Parse Object Groups
+  const objects: TmxObject[] = [];
+  const objectEls = doc.querySelectorAll('objectgroup object');
+  objectEls.forEach(el => {
+    const id = parseInt(el.getAttribute('id') || '0', 10);
+    const name = el.getAttribute('name') || '';
+    const x = Math.round(parseFloat(el.getAttribute('x') || '0'));
+    const y = Math.round(parseFloat(el.getAttribute('y') || '0'));
+    const w = Math.round(parseFloat(el.getAttribute('width') || '0'));
+    const h = Math.round(parseFloat(el.getAttribute('height') || '0'));
+
+    let depth: number | undefined = undefined;
+    let direction: string | undefined = undefined;
+    let state: string | undefined = undefined;
+    const rawProperties: Record<string, string> = {};
+
+    const propEls = el.querySelectorAll('properties property');
+    propEls.forEach(p => {
+      const pName = p.getAttribute('name');
+      const pVal = p.getAttribute('value') || '';
+      if (pName) {
+        rawProperties[pName] = pVal;
+        if (pName.toLowerCase() === 'depth') {
+          depth = parseInt(pVal, 10);
+        } else if (pName.toLowerCase() === 'direction') {
+          direction = pVal;
+        } else if (pName.toLowerCase() === 'state') {
+          state = pVal;
+        }
+      }
+    });
+
+    objects.push({
+      id,
+      name,
+      x,
+      y,
+      width: w,
+      height: h,
+      depth,
+      direction,
+      state,
+      rawProperties
+    });
+  });
+
+  return {
+    width,
+    height,
+    tilewidth,
+    tileheight,
+    tilesets,
+    layers,
+    objects
+  };
+}
+
+/**
+ * Serializes TmxData into a standard Tiled XML map string.
+ */
+export function serializeTmxXml(tmx: TmxData): string {
+  const nextObjectId = tmx.objects.reduce((max, o) => Math.max(max, o.id + 1), 1);
+  const lines: string[] = [];
+
+  lines.push('<?xml version="1.0" encoding="UTF-8"?>');
+  lines.push(`<map version="1.0" orientation="orthogonal" renderorder="right-down" width="${tmx.width}" height="${tmx.height}" tilewidth="${tmx.tilewidth}" tileheight="${tmx.tileheight}" nextobjectid="${nextObjectId}">`);
+
+  // Tilesets
+  for (const ts of tmx.tilesets) {
+    lines.push(` <tileset firstgid="${ts.firstgid}" name="${ts.name}" tilewidth="${ts.tilewidth}" tileheight="${ts.tileheight}" tilecount="${ts.tilecount}" columns="${ts.columns}">`);
+    lines.push(`  <image source="${ts.image.source}" width="${ts.image.width}" height="${ts.image.height}"/>`);
+    lines.push(' </tileset>');
+  }
+
+  // Layers
+  for (const layer of tmx.layers) {
+    const visStr = layer.visible ? '' : ' visible="0"';
+    lines.push(` <layer name="${layer.name}" width="${layer.width}" height="${layer.height}"${visStr}>`);
+    lines.push('  <data encoding="csv">');
+
+    // Format CSV grid rows
+    const rowStrings: string[] = [];
+    for (let r = 0; r < layer.height; r++) {
+      const start = r * layer.width;
+      const row = layer.data.slice(start, start + layer.width);
+      rowStrings.push(row.join(','));
+    }
+    lines.push(rowStrings.join(',\n'));
+
+    lines.push('  </data>');
+    lines.push(' </layer>');
+  }
+
+  // Object group
+  lines.push(' <objectgroup name="objects">');
+  for (const obj of tmx.objects) {
+    lines.push(`  <object id="${obj.id}" name="${obj.name}" x="${obj.x}" y="${obj.y}" width="${obj.width}" height="${obj.height}">`);
+    
+    // Properties
+    const propKeys = new Set(Object.keys(obj.rawProperties || {}));
+    if (obj.depth !== undefined) propKeys.add('depth');
+    if (obj.direction !== undefined) propKeys.add('direction');
+    if (obj.state !== undefined) propKeys.add('state');
+
+    if (propKeys.size > 0) {
+      lines.push('   <properties>');
+      for (const k of Array.from(propKeys).sort()) {
+        let val = obj.rawProperties?.[k];
+        if (k === 'depth' && obj.depth !== undefined) val = `${obj.depth}`;
+        if (k === 'direction' && obj.direction !== undefined) val = obj.direction;
+        if (k === 'state' && obj.state !== undefined) val = obj.state;
+        if (val !== undefined) {
+          lines.push(`    <property name="${k}" value="${val}"/>`);
+        }
+      }
+      lines.push('   </properties>');
+    }
+
+    lines.push('  </object>');
+  }
+  lines.push(' </objectgroup>');
+
+  lines.push('</map>');
+  return lines.join('\n');
+}
+
+/**
+ * Validates object IDs in a map:
+ * - Must be between MIN_OBJECT_ID (1) and MAX_OBJECT_ID (63).
+ * - 63 is reserved exclusively for the player object.
+ * - No duplicate IDs.
+ */
+export function validateObjectIds(objects: TmxObject[]): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  const seenIds = new Set<number>();
+
+  for (const obj of objects) {
+    if (obj.id < MIN_OBJECT_ID || obj.id > MAX_OBJECT_ID) {
+      errors.push(`Object "${obj.name}" has invalid ID ${obj.id}. Object IDs must be between ${MIN_OBJECT_ID} and ${MAX_OBJECT_ID}.`);
+    }
+
+    if (seenIds.has(obj.id)) {
+      errors.push(`Duplicate Object ID ${obj.id} found on "${obj.name}". Object IDs must be unique within a room.`);
+    } else {
+      seenIds.add(obj.id);
+    }
+
+    if (obj.id === PLAYER_OBJECT_ID && obj.name.toLowerCase() !== 'player') {
+      errors.push(`ID ${PLAYER_OBJECT_ID} is reserved exclusively for the player object (found on "${obj.name}").`);
+    }
+
+    if (obj.name.toLowerCase() === 'player' && obj.id !== PLAYER_OBJECT_ID) {
+      errors.push(`The player object must have ID ${PLAYER_OBJECT_ID} (currently ${obj.id}).`);
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors
+  };
+}
+
+/**
+ * Finds the next unused object ID in the range [MIN_OBJECT_ID, MAX_OBJECT_ID - 1].
+ * For a player object, returns PLAYER_OBJECT_ID (63).
+ */
+export function getNextAvailableObjectId(objects: TmxObject[], isPlayer = false): number {
+  if (isPlayer) return PLAYER_OBJECT_ID;
+
+  const used = new Set(objects.map(o => o.id));
+  for (let id = MIN_OBJECT_ID; id < PLAYER_OBJECT_ID; id++) {
+    if (!used.has(id)) {
+      return id;
+    }
+  }
+  return 1;
+}
+

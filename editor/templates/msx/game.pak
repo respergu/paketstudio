@@ -1,0 +1,30 @@
+language("en")
+font("font.png", 
+     " ¡!¿$&'()?,-.",
+     "0123456789:;Çüé",
+     "ABCDEFGHIJKLMNO",
+     "PQRSTUVWXYZàçèï",
+     "abcdefghijklmno",
+     "pqrstuvwxyzòáíóú",
+     "ñÑ^")
+action-names(
+     "Examine ",
+     "Pick up ",
+     "Use ",
+     "Talk to ",
+     "Exit through ",
+     " with ")     
+built-in-texts(
+     "I can't pick that up!",
+     "I can't use that!",
+     "I don't know what to say!",
+     "I already have it!",
+     "I can't reach from here!")
+
+text-area(0, 0, 32, 5)
+game-area(0, 6, 32, 11)
+gui(0, 18, "gui.png")
+inventory(10, 1)
+pointers("pointers.png")
+
+room("room1", "room.tmx", 0, 0):
