@@ -14,6 +14,13 @@ const TEMPLATE_MSX_WT: &str = "msx-wt";
 const DEFAULT_COMPILER_ARGS: &str = "%MAIN% %PLATFORM% %LANG% %OUT%";
 const IGNORED_NAMES: &[&str] = &[".ds_store", "thumbs.db", "desktop.ini"];
 const BUILTIN_PAKET_JAR: &[u8] = include_bytes!("../../../PAKET.jar");
+const BUNDLED_JAVA_PATHS: &[&str] = &[
+    "../Resources/jre/bin/java",
+    "jre/bin/java",
+    "jre/bin/java.exe",
+    "../jre/bin/java",
+    "../../../editor/src-tauri/jre/bin/java",
+];
 
 fn get_builtin_jar_path() -> Option<String> {
     let cache_dir = std::env::temp_dir().join("paket-studio");
@@ -72,6 +79,35 @@ fn detect_java(custom_path: Option<&str>) -> Option<String> {
         let trimmed = p.trim();
         if !trimmed.is_empty() && Path::new(trimmed).exists() {
             return Some(trimmed.to_string());
+        }
+    }
+
+    // Check bundled minimal JRE first
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            for rel in BUNDLED_JAVA_PATHS {
+                let candidate = parent.join(rel);
+                if let Ok(canonical) = candidate.canonicalize() {
+                    if canonical.is_file() {
+                        return Some(canonical.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        let cwd_candidates = [
+            cwd.join("jre/bin/java"),
+            cwd.join("src-tauri/jre/bin/java"),
+            cwd.join("editor/src-tauri/jre/bin/java"),
+        ];
+        for c in &cwd_candidates {
+            if let Ok(canonical) = c.canonicalize() {
+                if canonical.is_file() {
+                    return Some(canonical.to_string_lossy().to_string());
+                }
+            }
         }
     }
 

@@ -1,0 +1,16 @@
+# Build outputs
+built/
+dist/
+target/
+editor/src-tauri/jre/
+jre/
+
+# Node dependencies
+node_modules/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+AGENTS.md
