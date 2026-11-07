@@ -21,6 +21,7 @@ const BUNDLED_JAVA_PATHS: &[&str] = &[
     "../jre/bin/java",
     "../../../editor/src-tauri/jre/bin/java",
 ];
+const COMPILER_VERSION_PREFIX: &str = "Compiler ";
 
 fn get_builtin_jar_path() -> Option<String> {
     let cache_dir = std::env::temp_dir().join("paket-studio");
@@ -71,6 +72,7 @@ pub struct CompileResponse {
 pub struct SystemInfo {
     pub detected_java: Option<String>,
     pub detected_jar: Option<String>,
+    pub detected_jar_version: Option<String>,
     pub default_project_dir: Option<String>,
 }
 
@@ -192,10 +194,31 @@ fn detect_paket_jar(custom_path: Option<&str>, project_dir: Option<&str>) -> Opt
     get_builtin_jar_path()
 }
 
+fn detect_paket_jar_version(java_bin: Option<&str>, jar_path: Option<&str>) -> Option<String> {
+    let java = java_bin?;
+    let jar = jar_path?;
+    let output = Command::new(java)
+        .arg("-jar")
+        .arg(jar)
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        if let Some(pos) = line.find(COMPILER_VERSION_PREFIX) {
+            let ver = line[pos + COMPILER_VERSION_PREFIX.len()..].trim();
+            if !ver.is_empty() {
+                return Some(ver.to_string());
+            }
+        }
+    }
+    None
+}
+
 #[tauri::command]
 fn get_system_info(project_dir: Option<String>, custom_java: Option<String>, custom_jar: Option<String>) -> SystemInfo {
     let java = detect_java(custom_java.as_deref());
     let jar = detect_paket_jar(custom_jar.as_deref(), project_dir.as_deref());
+    let jar_version = detect_paket_jar_version(java.as_deref(), jar.as_deref());
     let default_dir = std::env::current_dir().ok().map(|d| {
         let s = d.to_string_lossy().to_string();
         if s.ends_with("/src-tauri") {
@@ -210,6 +233,7 @@ fn get_system_info(project_dir: Option<String>, custom_java: Option<String>, cus
     SystemInfo {
         detected_java: java,
         detected_jar: jar,
+        detected_jar_version: jar_version,
         default_project_dir: default_dir,
     }
 }

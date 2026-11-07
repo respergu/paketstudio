@@ -39,6 +39,7 @@ import {
   DEFAULT_PLATFORM,
   DEFAULT_LANGUAGE,
   DEFAULT_MAIN_PAK,
+  DEFAULT_OUTPUT_DIR,
   DEFAULT_EMULATOR_COMMAND,
   DEFAULT_COMPILER_ARGS,
   DEFAULT_EXPLORER_WIDTH,
@@ -1325,7 +1326,7 @@ export const App: React.FC = () => {
     setBottomConsoleTab('console');
     setIsBottomConsoleCollapsed(false);
     const mainPak = settings.mainPakRelative || DEFAULT_MAIN_PAK;
-    const outputDir = settings.outputDirRelative || `${settings.selectedPlatform}/built`;
+    const outputDir = settings.outputDirRelative || DEFAULT_OUTPUT_DIR;
 
     setConsoleOutput(`[PAKET Studio] Starting compilation...\n`);
     setConsoleOutput(prev => prev + `Target Platform: ${settings.selectedPlatform} | Language: ${settings.language}\n`);
@@ -1383,7 +1384,7 @@ export const App: React.FC = () => {
     setIsBottomConsoleCollapsed(false);
 
     // Find compiled target binary in output dir
-    const outDir = settings.outputDirRelative || `${settings.selectedPlatform}/built`;
+    const outDir = settings.outputDirRelative || DEFAULT_OUTPUT_DIR;
     const fullOutDir = `${projectPath}/${outDir}`;
     const filename = getTargetBinaryFilename(settings.selectedPlatform, settings.language, settings.targetFormat);
     const targetFile = `${fullOutDir}/${filename}`;

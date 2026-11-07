@@ -15,6 +15,7 @@ import {
   EMULATOR_PRESETS, 
   DEFAULT_COMPILER_ARGS, 
   DEFAULT_MAIN_PAK,
+  DEFAULT_OUTPUT_DIR,
   DEFAULT_EMULATOR_COMMAND,
   TARGET_FORMAT_DSK,
   TARGET_FORMAT_CDT,
@@ -182,7 +183,7 @@ export const BottomConsole: React.FC<BottomConsoleProps> = ({
     const javaBin = settings.javaPath || systemInfo.detected_java || 'java';
     const jar = settings.jarPath || systemInfo.detected_jar || 'PAKET.jar';
     const mainPak = settings.mainPakRelative || DEFAULT_MAIN_PAK;
-    const outDir = settings.outputDirRelative || `${settings.selectedPlatform}/built`;
+    const outDir = settings.outputDirRelative || DEFAULT_OUTPUT_DIR;
     const rawArgs = settings.compilerArgs || DEFAULT_COMPILER_ARGS;
     const expanded = rawArgs
       .replace('%MAIN%', mainPak)
@@ -192,7 +193,7 @@ export const BottomConsole: React.FC<BottomConsoleProps> = ({
     return `${javaBin} -jar ${jar} ${expanded}`;
   };
 
-  const outDir = settings.outputDirRelative || `${settings.selectedPlatform}/built`;
+  const outDir = settings.outputDirRelative || DEFAULT_OUTPUT_DIR;
   const targetFilename = getTargetBinaryFilename(settings.selectedPlatform, settings.language, settings.targetFormat);
   const targetBinaryPath = projectPath ? `${projectPath}/${outDir}/${targetFilename}` : `${outDir}/${targetFilename}`;
 
@@ -360,14 +361,27 @@ export const BottomConsole: React.FC<BottomConsoleProps> = ({
                     />
                     {systemInfo.detected_jar && (
                       <button
+                        type="button"
                         className="btn btn-sm btn-secondary"
                         onClick={() => onUpdateSettings({ jarPath: systemInfo.detected_jar || '' })}
+                        title={`Use detected: ${systemInfo.detected_jar}`}
                       >
-                        Found: {systemInfo.detected_jar.split('/').pop()}
+                        found PAKET.jar{systemInfo.detected_jar_version ? ` ${systemInfo.detected_jar_version}` : ''}
                       </button>
                     )}
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-secondary"
+                      onClick={() => onUpdateSettings({ jarPath: '' })}
+                      title="Reset to bundled PAKET.jar"
+                    >
+                      Reset
+                    </button>
                   </div>
-                  <span className="setting-desc">Resolved to: {settings.jarPath || systemInfo.detected_jar || 'Built-in PAKET.jar'}</span>
+                  <span className="setting-desc">
+                    Resolved to: {settings.jarPath || systemInfo.detected_jar || 'Built-in PAKET.jar'}
+                    {systemInfo.detected_jar_version ? ` (${systemInfo.detected_jar_version})` : ''}
+                  </span>
                 </div>
 
                 <div className="setting-item full-width">
@@ -377,20 +391,20 @@ export const BottomConsole: React.FC<BottomConsoleProps> = ({
                       type="text"
                       className="text-input"
                       value={settings.outputDirRelative}
-                      placeholder={`${settings.selectedPlatform}/built`}
+                      placeholder={DEFAULT_OUTPUT_DIR}
                       onChange={(e) => onUpdateSettings({ outputDirRelative: e.target.value })}
                     />
                     <button
                       type="button"
                       className="btn btn-sm btn-secondary"
-                      onClick={() => onUpdateSettings({ outputDirRelative: `${settings.selectedPlatform}/built` })}
-                      title="Reset to default platform output directory"
+                      onClick={() => onUpdateSettings({ outputDirRelative: DEFAULT_OUTPUT_DIR })}
+                      title="Reset to default output directory"
                     >
-                      Default: {settings.selectedPlatform}/built
+                      Default: {DEFAULT_OUTPUT_DIR}
                     </button>
                   </div>
                   <span className="setting-desc">
-                    Target binaries will be output to: <code>{settings.outputDirRelative || `${settings.selectedPlatform}/built`}</code>
+                    Target binaries will be output to: <code>{settings.outputDirRelative || DEFAULT_OUTPUT_DIR}</code>
                   </span>
                 </div>
 

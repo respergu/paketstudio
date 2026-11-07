@@ -14,6 +14,7 @@ import {
   Palette
 } from 'lucide-react';
 import type { Platform } from '../types';
+import { DEFAULT_OUTPUT_DIR } from '../constants';
 
 interface HeaderProps {
   projectPath: string | null;
@@ -154,7 +155,7 @@ export const Header: React.FC<HeaderProps> = ({
                 type="text"
                 className="text-input out-input"
                 value={outputDir}
-                placeholder={`${selectedPlatform}/built`}
+                placeholder={DEFAULT_OUTPUT_DIR}
                 onChange={(e) => onOutputDirChange(e.target.value)}
                 title="Compilation Output Directory (%OUT%)"
               />

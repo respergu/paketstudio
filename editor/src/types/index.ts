@@ -30,6 +30,7 @@ export interface CompileResponse {
 export interface SystemInfo {
   detected_java?: string;
   detected_jar?: string;
+  detected_jar_version?: string;
   default_project_dir?: string;
 }
 

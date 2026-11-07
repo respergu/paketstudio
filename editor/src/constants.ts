@@ -4,6 +4,7 @@ export const DEFAULT_PROJECT_NAME = 'MyAdventure';
 export const DEFAULT_PLATFORM: Platform = 'cpc';
 export const DEFAULT_LANGUAGE = 'en';
 export const DEFAULT_MAIN_PAK = 'game.pak';
+export const DEFAULT_OUTPUT_DIR = 'built';
 export const DEFAULT_EMULATOR_COMMAND = 'open %FILE%';
 export const DEFAULT_COMPILER_ARGS = '%MAIN% %PLATFORM% %LANG% %OUT%';
 
