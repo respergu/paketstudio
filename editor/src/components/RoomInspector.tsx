@@ -16,8 +16,9 @@ import {
 import Editor from '@monaco-editor/react';
 import { safeInvoke as invoke } from '../utils/ipc';
 import type { PakRoom, PakObject, FileNode, TmxData, TmxObject, TmxLayer, TmxTileset, Platform } from '../types';
-import { parseTmxXml, serializeTmxXml, validateObjectIds } from '../utils/tmxParser';
+import { parseTmxXml, serializeTmxXml, validateObjectIds, resolveExternalTilesets } from '../utils/tmxParser';
 import { getScreenGuidelines } from '../utils/screenAreas';
+import { parentDir } from '../utils/paths';
 import { RoomCanvas } from './RoomCanvas';
 import { 
   STORAGE_KEYS, 
@@ -225,12 +226,19 @@ export const RoomInspector: React.FC<RoomInspectorProps> = ({
       return;
     }
 
+    let isCancelled = false;
     invoke<string>('read_text_file', { filePath: matched.path })
-      .then(xmlStr => {
+      .then(async xmlStr => {
         try {
           const parsed = parseTmxXml(xmlStr);
+          const tilesetErrors = await resolveExternalTilesets(
+            parsed,
+            parentDir(matched.path),
+            filePath => invoke<string>('read_text_file', { filePath })
+          );
+          if (isCancelled) return;
           setTmxData(parsed);
-          setTmxError(null);
+          setTmxError(tilesetErrors.length ? tilesetErrors.join('; ') : null);
           setIsTmxDirty(false);
           historyRef.current = [{
             objects: JSON.parse(JSON.stringify(parsed.objects)),
@@ -242,14 +250,17 @@ export const RoomInspector: React.FC<RoomInspectorProps> = ({
           setCanUndo(false);
           setCanRedo(false);
         } catch (err: any) {
+          if (isCancelled) return;
           setTmxData(null);
           setTmxError(`Failed to parse ${matched.name}: ${err?.message || err}`);
         }
       })
       .catch(err => {
+        if (isCancelled) return;
         setTmxData(null);
         setTmxError(`Could not read file ${matched.name}: ${err}`);
       });
+    return () => { isCancelled = true; };
   }, [activeRoom, projectPath, files]);
 
   // Validation of object IDs in current map
@@ -309,7 +320,13 @@ export const RoomInspector: React.FC<RoomInspectorProps> = ({
   const handleSelectRoom = async (roomKey: string) => {
     if (roomKey === selectedRoomKey) return;
     if (isDirty || isTmxDirty) {
-      await transferCurrentRoomToMemory();
+      try {
+        await transferCurrentRoomToMemory();
+      } catch (err: any) {
+        // E.g. the map can't be saved as it is: stay on this room so the edits aren't lost.
+        setErrorMessage(err?.message || 'Failed to save room.');
+        return;
+      }
     }
     historyRef.current = [];
     historyIndexRef.current = -1;
