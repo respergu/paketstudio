@@ -35,6 +35,7 @@ import {
   rgbToHex 
 } from './utils/palettes';
 import { normalizePath, isSamePath } from './utils/paths';
+import { forgetPakCopy, isSameProjectFile, latestPakContent, viewTypeForFileName } from './utils/workspaceFiles';
 import {
   DEFAULT_PLATFORM,
   DEFAULT_LANGUAGE,
@@ -493,7 +494,9 @@ export const App: React.FC = () => {
         filePath,
         title: fileName,
         content,
-        isDirty: false
+        isDirty: false,
+        // Without a view type, a new PNG would open in the pixel editor but be saved as text.
+        viewType: viewTypeForFileName(fileName)
       };
 
       setTabs(prev => {
@@ -660,7 +663,13 @@ export const App: React.FC = () => {
       // Binary / image files
       const ext = file.extension.toLowerCase();
       let content = '';
-      if (!BINARY_EXTENSIONS.has(ext)) {
+      let isDirty = false;
+      // A .pak the panels have edited but not saved opens with those edits, so the tab stays the newest copy.
+      const panelCopy = ext === 'pak' ? inMemoryPakFiles[file.relative_path] : undefined;
+      if (panelCopy) {
+        content = panelCopy.content;
+        isDirty = panelCopy.isDirty;
+      } else if (!BINARY_EXTENSIONS.has(ext)) {
         content = await invoke<string>('read_text_file', { filePath: file.path });
       }
 
@@ -669,8 +678,8 @@ export const App: React.FC = () => {
         filePath: file.path,
         title: file.name,
         content,
-        isDirty: false,
-        viewType: BINARY_EXTENSIONS.has(ext) ? 'image' : 'code'
+        isDirty,
+        viewType: viewTypeForFileName(file.name)
       };
 
       setTabs(prev => [...prev, newTab]);
@@ -813,14 +822,11 @@ export const App: React.FC = () => {
     }
   };
 
-  // Read current in-memory content of a .pak file
+  // Read the newest text of a .pak file: its open tab, else the panels' copy, else the file on disk
   const getPakContentInMemory = useCallback(async (relPath: string): Promise<string> => {
-    if (inMemoryPakFiles[relPath]) {
-      return inMemoryPakFiles[relPath].content;
-    }
-    const openTab = tabs.find(t => t.filePath.endsWith(relPath) || t.filePath.endsWith(`/${relPath}`));
-    if (openTab) {
-      return openTab.content;
+    const inEditor = latestPakContent(relPath, inMemoryPakFiles, tabs);
+    if (inEditor !== undefined) {
+      return inEditor;
     }
     if (!projectPath) return '';
     const fullPath = relPath.startsWith('/') ? relPath : `${projectPath}/${relPath}`;
@@ -838,7 +844,7 @@ export const App: React.FC = () => {
     }));
 
     setTabs(prev => prev.map(t => {
-      if (t.filePath.endsWith(relPath) || t.filePath.endsWith(`/${relPath}`)) {
+      if (isSameProjectFile(t.filePath, relPath)) {
         return { ...t, content: newContent, isDirty: true };
       }
       if (t.id === 'special:items') {
@@ -865,7 +871,7 @@ export const App: React.FC = () => {
     }));
 
     setTabs(prev => prev.map(t => {
-      if (t.filePath.endsWith(relPath) || t.filePath.endsWith(`/${relPath}`)) {
+      if (isSameProjectFile(t.filePath, relPath)) {
         return { ...t, content: newContent, isDirty: true };
       }
       if (t.id === 'special:items') {
@@ -892,7 +898,7 @@ export const App: React.FC = () => {
     }));
 
     setTabs(prev => prev.map(t => {
-      if (t.filePath.endsWith(relPath) || t.filePath.endsWith(`/${relPath}`)) {
+      if (isSameProjectFile(t.filePath, relPath)) {
         return { ...t, content: newContent, isDirty: true };
       }
       if (t.id === 'special:items') {
@@ -919,7 +925,7 @@ export const App: React.FC = () => {
     }));
 
     setTabs(prev => prev.map(t => {
-      if (t.filePath.endsWith(relPath) || t.filePath.endsWith(`/${relPath}`)) {
+      if (isSameProjectFile(t.filePath, relPath)) {
         return { ...t, content: newContent, isDirty: true };
       }
       if (t.id === 'special:objects') {
@@ -946,7 +952,7 @@ export const App: React.FC = () => {
     }));
 
     setTabs(prev => prev.map(t => {
-      if (t.filePath.endsWith(relPath) || t.filePath.endsWith(`/${relPath}`)) {
+      if (isSameProjectFile(t.filePath, relPath)) {
         return { ...t, content: newContent, isDirty: true };
       }
       if (t.id === 'special:objects') {
@@ -973,7 +979,7 @@ export const App: React.FC = () => {
     }));
 
     setTabs(prev => prev.map(t => {
-      if (t.filePath.endsWith(relPath) || t.filePath.endsWith(`/${relPath}`)) {
+      if (isSameProjectFile(t.filePath, relPath)) {
         return { ...t, content: newContent, isDirty: true };
       }
       if (t.id === 'special:objects') {
@@ -1000,7 +1006,7 @@ export const App: React.FC = () => {
     }));
 
     setTabs(prev => prev.map(t => {
-      if (t.filePath.endsWith(relPath) || t.filePath.endsWith(`/${relPath}`)) {
+      if (isSameProjectFile(t.filePath, relPath)) {
         return { ...t, content: newContent, isDirty: true };
       }
       if (t.id === 'special:rooms') {
@@ -1027,7 +1033,7 @@ export const App: React.FC = () => {
     }));
 
     setTabs(prev => prev.map(t => {
-      if (t.filePath.endsWith(relPath) || t.filePath.endsWith(`/${relPath}`)) {
+      if (isSameProjectFile(t.filePath, relPath)) {
         return { ...t, content: newContent, isDirty: true };
       }
       if (t.id === 'special:rooms') {
@@ -1064,7 +1070,7 @@ export const App: React.FC = () => {
     }));
 
     setTabs(prev => prev.map(t => {
-      if (t.filePath.endsWith(relPath) || t.filePath.endsWith(`/${relPath}`)) {
+      if (isSameProjectFile(t.filePath, relPath)) {
         return { ...t, content: newContent, isDirty: true };
       }
       if (t.id === 'special:rooms') {
@@ -1170,8 +1176,10 @@ export const App: React.FC = () => {
       setTabs(prev => prev.map(t => (t.id === current.id ? { ...t, isDirty: false } : t)));
       setConsoleOutput(prev => prev + `Saved: ${current.title}\n`);
 
-      // If a .pak file was saved in Monaco, reload the visual inspectors
+      // If a .pak file was saved in Monaco, the panels' copy of it is now older than the file:
+      // drop it so the next panel edit starts from the saved text, and reload the inspectors.
       if (current.filePath.toLowerCase().endsWith('.pak')) {
+        setInMemoryPakFiles(prev => forgetPakCopy(prev, current.filePath));
         reloadProjectInspectors(files);
       }
     } catch (err) {
