@@ -56,7 +56,7 @@ export interface PakImageRef {
 
 export interface PakAnimationRef {
   speed: number;
-  loop: number;
+  /** The order frames are played in, as indices into `frames` (animation(speed, ...sequence)). */
   sequence?: number[];
   frames: PakImageRef[];
 }

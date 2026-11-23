@@ -24,12 +24,34 @@ export function latestPakContent(relPath: string, copies: PakCopies, tabs: Edito
 }
 
 /**
- * Drops the panels' copy of a file the code editor has just saved, so the panels don't later
- * edit (and save) that older copy over the saved text.
+ * Updates the panels' copy of a file the code editor has just saved to the saved text, so the
+ * panels don't later edit (and save) their older copy over it.
  */
-export function forgetPakCopy(copies: PakCopies, savedFilePath: string): PakCopies {
-  const remaining = Object.entries(copies).filter(([relPath]) => !isSameProjectFile(savedFilePath, relPath));
-  return remaining.length === Object.keys(copies).length ? copies : Object.fromEntries(remaining);
+export function copiesAfterTextSave(copies: PakCopies, savedFilePath: string, savedContent: string): PakCopies {
+  return Object.fromEntries(
+    Object.entries(copies).map(([relPath, copy]) =>
+      isSameProjectFile(savedFilePath, relPath) ? [relPath, { content: savedContent, isDirty: false }] : [relPath, copy]
+    )
+  );
+}
+
+/**
+ * The panels' copies after Save All has written every unsaved copy and then every unsaved tab.
+ * Each copy now holds what is on disk: its tab's text if that tab was saved after it. A copy
+ * that failed to write (and has no saved tab) stays unsaved.
+ */
+export function copiesAfterSavingAll(
+  copies: PakCopies,
+  savedTabs: Array<{ filePath: string; content: string }>,
+  failedRelPaths: string[]
+): PakCopies {
+  let result: PakCopies = Object.fromEntries(
+    Object.entries(copies).map(([relPath, copy]) => [relPath, { ...copy, isDirty: copy.isDirty && failedRelPaths.includes(relPath) }])
+  );
+  for (const tab of savedTabs) {
+    result = copiesAfterTextSave(result, tab.filePath, tab.content);
+  }
+  return result;
 }
 
 /** Opens images and other binary files in the pixel editor (saved as binary), everything else as code. */

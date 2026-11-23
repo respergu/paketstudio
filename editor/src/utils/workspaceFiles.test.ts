@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { EditorTab } from '../types';
-import { forgetPakCopy, latestPakContent, viewTypeForFileName } from './workspaceFiles';
+import { copiesAfterSavingAll, copiesAfterTextSave, latestPakContent, viewTypeForFileName } from './workspaceFiles';
 
 function codeTab(filePath: string, content: string, isDirty = false): EditorTab {
   return { id: filePath, filePath, title: filePath.split('/').pop() ?? filePath, content, isDirty, viewType: 'code' };
@@ -20,22 +20,45 @@ describe('which copy of a .pak file a panel edits', () => {
     expect(latestPakContent('cpc/game.pak', panelCopies, [])).toBe('unsaved panel edit');
   });
 
-  it('goes back to the file on disk after the code editor saves it and its tab is closed', () => {
+  it('edits the saved text after the code editor saves the file and its tab is closed', () => {
     const panelCopies = { 'cpc/game.pak': { content: 'copy from an earlier panel edit', isDirty: false } };
 
-    const afterSave = forgetPakCopy(panelCopies, '/projects/demo/cpc/game.pak');
+    const afterSave = copiesAfterTextSave(panelCopies, '/projects/demo/cpc/game.pak', 'text saved from the tab');
 
-    expect(latestPakContent('cpc/game.pak', afterSave, [])).toBeUndefined();
+    expect(latestPakContent('cpc/game.pak', afterSave, [])).toBe('text saved from the tab');
   });
 
-  it('keeps the copies of other files when one is saved', () => {
+  it('leaves the copies of other files alone when one is saved', () => {
     const panelCopies = {
       'cpc/game.pak': { content: 'game', isDirty: false },
       'cpc/rooms.pak': { content: 'rooms', isDirty: true },
     };
 
-    expect(forgetPakCopy(panelCopies, '/projects/demo/cpc/game.pak')).toEqual({
+    expect(copiesAfterTextSave(panelCopies, '/projects/demo/cpc/game.pak', 'saved game')).toEqual({
+      'cpc/game.pak': { content: 'saved game', isDirty: false },
       'cpc/rooms.pak': { content: 'rooms', isDirty: true },
+    });
+  });
+
+  it('edits the saved text after Save All, when the tab held newer text than the panel copy', () => {
+    // A panel edit made the copy; then text was typed in the tab, and Save All wrote both (the tab last).
+    const panelCopies = { 'cpc/game.pak': { content: 'panel edit', isDirty: true } };
+    const savedTabs = [{ filePath: '/projects/demo/cpc/game.pak', content: 'panel edit + typed text' }];
+
+    const afterSaveAll = copiesAfterSavingAll(panelCopies, savedTabs, []);
+
+    expect(afterSaveAll).toEqual({ 'cpc/game.pak': { content: 'panel edit + typed text', isDirty: false } });
+  });
+
+  it('keeps a copy that Save All failed to write, still unsaved', () => {
+    const panelCopies = {
+      'cpc/game.pak': { content: 'saved', isDirty: true },
+      'cpc/rooms.pak': { content: 'write failed', isDirty: true },
+    };
+
+    expect(copiesAfterSavingAll(panelCopies, [], ['cpc/rooms.pak'])).toEqual({
+      'cpc/game.pak': { content: 'saved', isDirty: false },
+      'cpc/rooms.pak': { content: 'write failed', isDirty: true },
     });
   });
 

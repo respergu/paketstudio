@@ -35,7 +35,14 @@ import {
   rgbToHex 
 } from './utils/palettes';
 import { normalizePath, isSamePath } from './utils/paths';
-import { forgetPakCopy, isSameProjectFile, latestPakContent, viewTypeForFileName } from './utils/workspaceFiles';
+import {
+  copiesAfterSavingAll,
+  copiesAfterTextSave,
+  isSameProjectFile,
+  latestPakContent,
+  viewTypeForFileName,
+  type PakCopies
+} from './utils/workspaceFiles';
 import {
   DEFAULT_PLATFORM,
   DEFAULT_LANGUAGE,
@@ -117,7 +124,7 @@ export const App: React.FC = () => {
   const [projectItems, setProjectItems] = useState<PakItem[]>([]);
   const [projectObjects, setProjectObjects] = useState<PakObject[]>([]);
   const [projectRooms, setProjectRooms] = useState<PakRoom[]>([]);
-  const [inMemoryPakFiles, setInMemoryPakFiles] = useState<Record<string, { content: string; isDirty: boolean }>>({});
+  const [inMemoryPakFiles, setInMemoryPakFiles] = useState<PakCopies>({});
 
   const [consoleOutput, setConsoleOutput] = useState<string>('');
   const [problems, setProblems] = useState<CompilerProblem[]>([]);
@@ -666,9 +673,9 @@ export const App: React.FC = () => {
       let isDirty = false;
       // A .pak the panels have edited but not saved opens with those edits, so the tab stays the newest copy.
       const panelCopy = ext === 'pak' ? inMemoryPakFiles[file.relative_path] : undefined;
-      if (panelCopy) {
+      if (panelCopy?.isDirty) {
         content = panelCopy.content;
-        isDirty = panelCopy.isDirty;
+        isDirty = true;
       } else if (!BINARY_EXTENSIONS.has(ext)) {
         content = await invoke<string>('read_text_file', { filePath: file.path });
       }
@@ -1090,6 +1097,7 @@ export const App: React.FC = () => {
   const handleSaveAllDirtyFiles = useCallback(async () => {
     if (!projectPath) return;
 
+    const unsavedCopies: string[] = [];
     for (const [relPath, fileData] of Object.entries(inMemoryPakFiles)) {
       if (fileData.isDirty) {
         const fullPath = relPath.startsWith('/') ? relPath : `${projectPath}/${relPath}`;
@@ -1098,10 +1106,12 @@ export const App: React.FC = () => {
           setConsoleOutput(prev => prev + `Saved: ${relPath}\n`);
         } catch (err) {
           console.error(`Failed to save ${relPath}:`, err);
+          unsavedCopies.push(relPath);
         }
       }
     }
 
+    const savedTextTabs: Array<{ filePath: string; content: string }> = [];
     for (const tab of tabs) {
       if (tab.isDirty && !tab.filePath.startsWith('special:')) {
         try {
@@ -1109,6 +1119,7 @@ export const App: React.FC = () => {
             await invoke('write_file_base64', { filePath: tab.filePath, base64Data: tab.content });
           } else {
             await invoke('write_text_file', { filePath: tab.filePath, content: tab.content });
+            savedTextTabs.push({ filePath: tab.filePath, content: tab.content });
           }
           setConsoleOutput(prev => prev + `Saved: ${tab.title}\n`);
         } catch (err) {
@@ -1117,13 +1128,9 @@ export const App: React.FC = () => {
       }
     }
 
-    setInMemoryPakFiles(prev => {
-      const next: Record<string, { content: string; isDirty: boolean }> = {};
-      for (const [k, v] of Object.entries(prev)) {
-        next[k] = { ...v, isDirty: false };
-      }
-      return next;
-    });
+    // A tab saved after the panels' copy of the same file holds newer text: the copy takes that
+    // text, so a later panel edit doesn't start from (and save) older text.
+    setInMemoryPakFiles(prev => copiesAfterSavingAll(prev, savedTextTabs, unsavedCopies));
 
     setTabs(prev => prev.map(t => ({ ...t, isDirty: false })));
   }, [projectPath, inMemoryPakFiles, tabs]);
@@ -1177,9 +1184,9 @@ export const App: React.FC = () => {
       setConsoleOutput(prev => prev + `Saved: ${current.title}\n`);
 
       // If a .pak file was saved in Monaco, the panels' copy of it is now older than the file:
-      // drop it so the next panel edit starts from the saved text, and reload the inspectors.
+      // replace it with the saved text so the next panel edit starts from it, and reload the inspectors.
       if (current.filePath.toLowerCase().endsWith('.pak')) {
-        setInMemoryPakFiles(prev => forgetPakCopy(prev, current.filePath));
+        setInMemoryPakFiles(prev => copiesAfterTextSave(prev, current.filePath, current.content));
         reloadProjectInspectors(files);
       }
     } catch (err) {

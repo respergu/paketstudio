@@ -54,6 +54,15 @@ describe('saving a room', () => {
     expect(saved).toBe(pak.replace('0, 0, subroom', '0, 4, subroom'));
   });
 
+  it('rewrites the header when a header flag is removed', () => {
+    const pak = 'room("tv", "tv.tmx", 0, 0, lock-player-zoom-75):\n    rule examine-object(1):\n        message("A TV.")\n';
+    const tv = room(pak, 'tv');
+
+    const saved = updateRoomInContent(pak, { ...tv, otherFlags: undefined }, 'tv');
+
+    expect(saved).toBe(pak.replace(', lock-player-zoom-75', ''));
+  });
+
   it('keeps blank lines and tab indentation when the rules are edited', () => {
     const pak = [
       'room("hall", "hall.tmx", 0, 0):',
@@ -240,6 +249,42 @@ describe('saving an object', () => {
         '        empty-image(8, 48)\n    state("idle", "down"):\n        image("objects.png", 0, 0, 16, 16)\n'
       )
     );
+  });
+
+  it('keeps sprites written at the same indentation as their state', () => {
+    // PAKET ignores indentation: each image still belongs to the state before it.
+    const pak = [
+      'object("lamp", "lamp", "A lamp."):',
+      '    state("off", "left"):',
+      '    image("objects.png", 0, 0, 8, 16)',
+      '    state("on", "left"):',
+      '    image("objects.png", 8, 0, 16, 16)',
+      '',
+    ].join('\n');
+    const lamp = object(pak, 'lamp');
+
+    const saved = updateObjectInContent(pak, { ...lamp, description: 'An old lamp.' }, 'lamp');
+
+    expect(lamp.states.map(s => s.image?.x1)).toEqual([0, 8]);
+    expect(saved).toBe(pak.replace('"A lamp."', '"An old lamp."'));
+  });
+
+  it('keeps a rule written between states in place when the object is edited', () => {
+    const pak = [
+      'object("tap", "tap", "A tap."):',
+      '    state("off", "front"):',
+      '        image("objects.png", 0, 0, 8, 8)',
+      '    rule use-object($this):',
+      '        change-object-state($this, "on")',
+      '    state("on", "front"):',
+      '        image("objects.png", 8, 0, 16, 8)',
+      '',
+    ].join('\n');
+    const tap = object(pak, 'tap');
+
+    const saved = updateObjectInContent(pak, { ...tap, name: 'faucet' }, 'tap');
+
+    expect(saved).toBe(pak.replace('object("tap", "tap",', 'object("tap", "faucet",'));
   });
 
   it('keeps a multi-line collision mask as written when nothing was edited', () => {

@@ -158,10 +158,24 @@ interface StateLayout {
   selection?: LineSpan;
 }
 
-const isBlankOrComment = (line: string) => {
+function isBlankOrComment(line: string): boolean {
   const t = line.trim();
   return !t || t.startsWith('#') || t.startsWith(';');
-};
+}
+
+/**
+ * The last line of the top-level block whose header is at `headerLine`: the last non-blank line
+ * of the indented lines that follow it. Blank lines after the block aren't part of it.
+ */
+function lastBlockLine(lines: string[], headerLine: number): number {
+  let last = headerLine;
+  for (let i = headerLine + 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    if (getIndentation(lines[i]) === 0) break;
+    last = i;
+  }
+  return last;
+}
 
 /** Net count of '(' minus ')' on a line, ignoring strings and # comments. */
 function parenBalance(line: string): number {
@@ -267,7 +281,7 @@ function parseStateLines(stateLines: string[]): { state: PakObjectState; layout:
         j = frameSpan.end + 1;
       }
       image = undefined;
-      animation = { speed, loop: sequence[0] ?? 0, sequence: sequence.length > 0 ? sequence : undefined, frames };
+      animation = { speed, sequence: sequence.length > 0 ? sequence : undefined, frames };
       layout.sprite = span;
     } else if (/^collisionmask\s*\(/i.test(t)) {
       const maskMatch = t.match(/^collisionmask\s*\((.*?)\)/i);
@@ -307,11 +321,23 @@ function parseStateLines(stateLines: string[]): { state: PakObjectState; layout:
  * Blank and comment lines just before a state travel with that state; everything that isn't
  * part of a state (rules, comments after the last state) is kept verbatim in `rules`.
  */
-function parseObjectBody(body: string[]): { states: PakObjectState[]; rules: string[] } {
+/** An object body in file order: runs of object-level lines, and slots where a state was written. */
+type ObjectBodyPart = { kind: 'lines'; lines: string[] } | { kind: 'state' };
+
+function parseObjectBody(body: string[]): { states: PakObjectState[]; rules: string[]; parts: ObjectBodyPart[] } {
   const states: PakObjectState[] = [];
   const rules: string[] = [];
+  const parts: ObjectBodyPart[] = [];
   const directImages: PakImageRef[] = [];
   let pending: string[] = [];
+
+  const keepLines = (kept: string[]) => {
+    if (kept.length === 0) return;
+    rules.push(...kept);
+    const last = parts[parts.length - 1];
+    if (last?.kind === 'lines') last.lines.push(...kept);
+    else parts.push({ kind: 'lines', lines: [...kept] });
+  };
 
   let k = 0;
   while (k < body.length) {
@@ -329,50 +355,58 @@ function parseObjectBody(body: string[]): { states: PakObjectState[]; rules: str
       const stateLines = [...pending, line];
       pending = [];
       k++;
-      // The state's body is everything indented deeper than state(...). Blank lines only count
-      // as part of it when more of the body follows them.
+      // The state's body is everything indented deeper than state(...), plus the state directives
+      // that follow it at any indentation (PAKET ignores indentation). Blank lines and shallower
+      // comments only count as part of it when more of the body follows them.
       let held: string[] = [];
       while (k < body.length) {
         const bodyLine = body[k];
-        if (!bodyLine.trim()) {
-          held.push(bodyLine);
-        } else if (getIndentation(bodyLine) > stateIndent) {
-          stateLines.push(...held, bodyLine);
+        if (getIndentation(bodyLine) > stateIndent || isStateDirective(bodyLine)) {
+          const end = directiveEnd(body, k);
+          stateLines.push(...held, ...body.slice(k, end + 1));
           held = [];
+          k = end + 1;
+        } else if (isBlankOrComment(bodyLine)) {
+          held.push(bodyLine);
+          k++;
         } else {
           break;
         }
-        k++;
       }
       pending = held;
 
       const parsed = parseStateLines(stateLines);
       if (parsed) {
         states.push({ ...parsed.state, source: stateLines });
+        parts.push({ kind: 'state' });
       } else {
-        rules.push(...stateLines);
+        keepLines(stateLines);
       }
       continue;
     }
 
     if (/^image\s*\(/i.test(t)) {
-      // Not valid PAKET; shown in the panel as a default state, as before.
+      // An image before any state isn't valid PAKET; it is shown in the panel as a default state, as before.
       const img = parseImageDirective(t);
       if (img) directImages.push(img);
-      rules.push(...pending);
+      keepLines(pending);
     } else {
-      rules.push(...pending, line);
+      keepLines([...pending, line]);
     }
     pending = [];
     k++;
   }
-  rules.push(...pending);
+  keepLines(pending);
 
   if (states.length === 0 && directImages.length > 0) {
     states.push({ name: 'idle', direction: 'front', image: directImages[0], rules: [] });
   }
 
-  return { states, rules };
+  return { states, rules, parts };
+}
+
+function isStateDirective(line: string): boolean {
+  return /^(?:image|empty-image|animation|collisionmask|selection|selection-type)\s*\(/i.test(line.trim());
 }
 
 /** Where, within an item's block, each directive the Items panel edits was written. */
@@ -438,10 +472,9 @@ export function parsePakFile(content: string, filePath: string): ParseResult {
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
-    const trimmed = line.trim();
 
     // Skip empty lines and comment lines
-    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';')) {
+    if (isBlankOrComment(line)) {
       i++;
       continue;
     }
@@ -470,25 +503,8 @@ export function parsePakFile(content: string, filePath: string): ParseResult {
         const name = stripQuotes(args[1] || id);
         const description = stripQuotes(args[2] || '');
 
-        i++;
-        let lastContentLine = startLine;
-
-        // Collect indented child lines of this item
-        while (i < lines.length) {
-          const childLine = lines[i];
-
-          if (!childLine.trim()) {
-            i++;
-            continue;
-          }
-
-          if (getIndentation(childLine) > 0) {
-            lastContentLine = i;
-            i++;
-          } else {
-            break;
-          }
-        }
+        const lastContentLine = lastBlockLine(lines, startLine);
+        i = lastContentLine + 1;
 
         const { image, defaultUseMessage, rules } = parseItemBody(lines.slice(startLine, lastContentLine + 1));
 
@@ -522,24 +538,8 @@ export function parsePakFile(content: string, filePath: string): ParseResult {
         const name = stripQuotes(args[1] || id);
         const description = stripQuotes(args[2] || '');
 
-        i++;
-        let lastContentLine = startLine;
-
-        while (i < lines.length) {
-          const childLine = lines[i];
-
-          if (!childLine.trim()) {
-            i++;
-            continue;
-          }
-
-          if (getIndentation(childLine) > 0) {
-            lastContentLine = i;
-            i++;
-          } else {
-            break;
-          }
-        }
+        const lastContentLine = lastBlockLine(lines, startLine);
+        i = lastContentLine + 1;
 
         const { states, rules: objectRules } = parseObjectBody(lines.slice(startLine + 1, lastContentLine + 1));
 
@@ -584,31 +584,10 @@ export function parsePakFile(content: string, filePath: string): ParseResult {
           }
         }
 
-        i++;
-        let lastContentLine = startLine;
-        const rules: string[] = [];
-        // Blank lines belong to the rules only if more rules follow them.
-        let pendingBlankLines: string[] = [];
-
-        while (i < lines.length) {
-          const childLine = lines[i];
-          const childTrimmed = childLine.trim();
-
-          if (!childTrimmed) {
-            pendingBlankLines.push(childLine);
-            i++;
-            continue;
-          }
-
-          if (getIndentation(childLine) > 0) {
-            lastContentLine = i;
-            rules.push(...pendingBlankLines, childLine);
-            pendingBlankLines = [];
-            i++;
-          } else {
-            break;
-          }
-        }
+        const lastContentLine = lastBlockLine(lines, startLine);
+        i = lastContentLine + 1;
+        // The rules are the body exactly as written, blank lines between them included.
+        const rules = lines.slice(startLine + 1, lastContentLine + 1);
 
         rooms.push({
           id,
@@ -895,13 +874,30 @@ export function insertObjectIntoContent(content: string, obj: PakObject): string
 
 /**
  * Renders an object for saving over `original` (the same object as currently parsed from `lines`).
+ * The body is rebuilt in its original order: the panel's states fill the places where states were
+ * written, and object-level lines (rules, comments) stay where they are, since the Objects panel
+ * doesn't edit them. States added in the panel go after the last existing one.
  */
 function renderObjectOver(obj: PakObject, original: PakObject, lines: string[]): string[] {
   if (sameValue(objectContent(obj), objectContent(original))) {
     return lines.slice(original.startLine, original.endLine + 1);
   }
   const sameHeader = obj.id === original.id && obj.name === original.name && obj.description === original.description;
-  return [sameHeader ? lines[original.startLine] : objectHeader(obj), ...objectBodyLines(obj)];
+  const { parts } = parseObjectBody(lines.slice(original.startLine + 1, original.endLine + 1));
+  const states = obj.states.map(renderState);
+  const slots = parts.filter(part => part.kind === 'state').length;
+  const addedStates = states.slice(slots).flat();
+  const lastSlot = parts.map(part => part.kind).lastIndexOf('state');
+
+  const body: string[] = lastSlot < 0 ? [...addedStates] : [];
+  let nextState = 0;
+  parts.forEach((part, idx) => {
+    if (part.kind === 'lines') body.push(...part.lines);
+    else body.push(...(states[nextState++] ?? []));
+    if (idx === lastSlot) body.push(...addedStates);
+  });
+
+  return [sameHeader ? lines[original.startLine] : objectHeader(obj), ...body];
 }
 
 /**
@@ -993,7 +989,8 @@ function renderRoomOver(room: PakRoom, original: PakRoom, lines: string[]): stri
     room.tmxFile === original.tmxFile &&
     room.x === original.x &&
     room.y === original.y &&
-    !!room.subroom === !!original.subroom;
+    !!room.subroom === !!original.subroom &&
+    sameValue(room.otherFlags ?? [], original.otherFlags ?? []);
   const sameRules = sameBodyLines(room.rules, original.rules);
 
   const header = sameHeader ? [lines[original.startLine]] : generated.slice(0, 1);
