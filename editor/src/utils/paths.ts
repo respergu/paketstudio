@@ -12,6 +12,20 @@ export function normalizePath(p: string | null | undefined): string {
 }
 
 /**
+ * The folder part of a path ("a/b/c.tmx" -> "a/b"), splitting on either separator;
+ * '' if the path has no folder part. Separators are left as they are.
+ */
+export function parentDir(p: string): string {
+  const sep = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+  return sep >= 0 ? p.slice(0, sep) : '';
+}
+
+/** "/a/b", "\a\b" or "C:/a/b": Tiled writes an absolute path when a file is on another drive. */
+export function isAbsolutePath(p: string): boolean {
+  return /^([\\/]|[A-Za-z]:[\\/])/.test(p);
+}
+
+/**
  * Checks if two paths are equivalent, taking into account path separators,
  * double slashes, trailing slashes, and case-insensitivity.
  */

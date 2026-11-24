@@ -138,6 +138,8 @@ export interface TmxTileset {
     width: number;
     height: number;
   };
+  /** Set for an external tileset: the .tsx path exactly as written in the .tmx. */
+  externalSource?: string;
 }
 
 export interface TmxLayer {

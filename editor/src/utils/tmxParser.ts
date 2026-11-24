@@ -1,5 +1,6 @@
 import type { TmxData, TmxTileset, TmxLayer, TmxObject } from '../types';
 import { MIN_OBJECT_ID, MAX_OBJECT_ID, PLAYER_OBJECT_ID } from '../constants';
+import { parentDir, isAbsolutePath } from './paths';
 
 /**
  * Parses an XML string representing a Tiled .tmx map into structured TmxData.
@@ -38,6 +39,9 @@ export function parseTmxXml(xmlString: string): TmxData {
     const imageSource = imgEl ? (imgEl.getAttribute('source') || '') : '';
     const imageWidth = imgEl ? parseInt(imgEl.getAttribute('width') || '0', 10) : 0;
     const imageHeight = imgEl ? parseInt(imgEl.getAttribute('height') || '0', 10) : 0;
+    // External tileset, e.g. <tileset firstgid="17" source="hall.tsx"/>: the image and sizes
+    // live in the .tsx file. Keep the reference so it can be resolved and written back as is.
+    const externalSource = imgEl ? undefined : (el.getAttribute('source') || undefined);
 
     tilesets.push({
       firstgid,
@@ -50,7 +54,8 @@ export function parseTmxXml(xmlString: string): TmxData {
         source: imageSource,
         width: imageWidth,
         height: imageHeight
-      }
+      },
+      ...(externalSource ? { externalSource } : {})
     });
   });
 
@@ -140,6 +145,53 @@ export function parseTmxXml(xmlString: string): TmxData {
 }
 
 /**
+ * Fills in external tilesets (<tileset source="x.tsx"/>) from their .tsx files so the room
+ * editor can draw them and count their tiles. The reference itself is kept, so saving
+ * writes it back unchanged.
+ */
+export async function resolveExternalTilesets(
+  tmx: TmxData,
+  tmxDir: string,
+  readTextFile: (path: string) => Promise<string>
+): Promise<string[]> {
+  const errors: string[] = [];
+  for (const ts of tmx.tilesets) {
+    const ref = ts.externalSource;
+    if (!ref) continue;
+    try {
+      const tsxPath = isAbsolutePath(ref) ? ref : `${tmxDir}/${ref}`;
+      const doc = new DOMParser().parseFromString(await readTextFile(tsxPath), 'application/xml');
+      const root = doc.querySelector('tileset');
+      const img = root?.querySelector('image');
+      if (!root || !img) throw new Error('no <tileset> with an <image> inside');
+      // The .tsx image path is relative to the .tsx; RoomCanvas looks for it relative to the .tmx.
+      const imgSrc = img.getAttribute('source') || '';
+      const tsxDir = parentDir(ref);
+      ts.name = root.getAttribute('name') || ts.name;
+      ts.tilewidth = parseInt(root.getAttribute('tilewidth') || `${ts.tilewidth}`, 10);
+      ts.tileheight = parseInt(root.getAttribute('tileheight') || `${ts.tileheight}`, 10);
+      ts.tilecount = parseInt(root.getAttribute('tilecount') || '0', 10);
+      ts.columns = parseInt(root.getAttribute('columns') || '0', 10);
+      ts.image = {
+        source: isAbsolutePath(imgSrc) || !tsxDir ? imgSrc : `${tsxDir}/${imgSrc}`,
+        width: parseInt(img.getAttribute('width') || '0', 10),
+        height: parseInt(img.getAttribute('height') || '0', 10)
+      };
+    } catch (err: any) {
+      errors.push(`Could not read tileset ${ref}: ${err?.message || err}`);
+    }
+  }
+  return errors;
+}
+
+/**
+ * The firstgid for a tileset added after the existing ones: one past the last tile in use.
+ */
+export function getNextFirstGid(tilesets: TmxTileset[]): number {
+  return tilesets.reduce((max, ts) => Math.max(max, ts.firstgid + ts.tilecount), 1);
+}
+
+/**
  * Serializes TmxData into a standard Tiled XML map string.
  */
 export function serializeTmxXml(tmx: TmxData): string {
@@ -151,6 +203,15 @@ export function serializeTmxXml(tmx: TmxData): string {
 
   // Tilesets
   for (const ts of tmx.tilesets) {
+    if (ts.externalSource) {
+      // Write the reference back; the .tsx file itself is never touched.
+      lines.push(` <tileset firstgid="${ts.firstgid}" source="${ts.externalSource}"/>`);
+      continue;
+    }
+    if (!ts.image.source) {
+      // An empty image path breaks the map for PAKET and Tiled. Refuse to save instead.
+      throw new Error(`Tileset "${ts.name}" (firstgid ${ts.firstgid}) has no image, so the map was not saved.`);
+    }
     lines.push(` <tileset firstgid="${ts.firstgid}" name="${ts.name}" tilewidth="${ts.tilewidth}" tileheight="${ts.tileheight}" tilecount="${ts.tilecount}" columns="${ts.columns}">`);
     lines.push(`  <image source="${ts.image.source}" width="${ts.image.width}" height="${ts.image.height}"/>`);
     lines.push(' </tileset>');
@@ -208,8 +269,49 @@ export function serializeTmxXml(tmx: TmxData): string {
   return lines.join('\n');
 }
 
+/** PAKET matches the "ID" property name in any case. */
+function isIdPropertyName(name: string): boolean {
+  return name.toLowerCase() === 'id';
+}
+
 /**
- * Validates object IDs in a map:
+ * The ID PAKET gives an object: an "ID" property overrides the object's own id
+ * (PAKRoom.java, where the objectgroup is read). Tutorial 3 gives the player ID 63 this way.
+ */
+export function getPaketObjectId(obj: TmxObject): number {
+  let id = obj.id;
+  for (const [k, v] of Object.entries(obj.rawProperties || {})) {
+    if (isIdPropertyName(k) && !isNaN(parseInt(v, 10))) id = parseInt(v, 10);
+  }
+  return id;
+}
+
+/**
+ * Gives an object a new PAKET ID. If it has an "ID" property, that property is changed and the
+ * object id (which the editor uses to tell objects apart) is kept; otherwise the object id changes.
+ */
+export function setPaketObjectId(obj: TmxObject, id: number): TmxObject {
+  const props = obj.rawProperties || {};
+  const idKeys = Object.keys(props).filter(isIdPropertyName);
+  if (idKeys.length === 0) return { ...obj, id };
+  const rawProperties = { ...props };
+  for (const k of idKeys) rawProperties[k] = `${id}`;
+  return { ...obj, rawProperties };
+}
+
+/**
+ * Whether giving `target` the PAKET ID `id` (via setPaketObjectId) would clash with another
+ * object: either PAKET would see two objects with that ID, or two objects would share an object id.
+ */
+export function isObjectIdTaken(objects: TmxObject[], target: TmxObject, id: number): boolean {
+  const changesObjectId = setPaketObjectId(target, id).id !== target.id;
+  return objects.some(o =>
+    o.id !== target.id && (getPaketObjectId(o) === id || (changesObjectId && o.id === id))
+  );
+}
+
+/**
+ * Validates object IDs in a map, using the ID PAKET will see (see getPaketObjectId):
  * - Must be between MIN_OBJECT_ID (1) and MAX_OBJECT_ID (63).
  * - 63 is reserved exclusively for the player object.
  * - No duplicate IDs.
@@ -218,7 +320,8 @@ export function validateObjectIds(objects: TmxObject[]): { valid: boolean; error
   const errors: string[] = [];
   const seenIds = new Set<number>();
 
-  for (const obj of objects) {
+  for (const o of objects) {
+    const obj = { ...o, id: getPaketObjectId(o) };
     if (obj.id < MIN_OBJECT_ID || obj.id > MAX_OBJECT_ID) {
       errors.push(`Object "${obj.name}" has invalid ID ${obj.id}. Object IDs must be between ${MIN_OBJECT_ID} and ${MAX_OBJECT_ID}.`);
     }
@@ -251,7 +354,7 @@ export function validateObjectIds(objects: TmxObject[]): { valid: boolean; error
 export function getNextAvailableObjectId(objects: TmxObject[], isPlayer = false): number {
   if (isPlayer) return PLAYER_OBJECT_ID;
 
-  const used = new Set(objects.map(o => o.id));
+  const used = new Set(objects.flatMap(o => [o.id, getPaketObjectId(o)]));
   for (let id = MIN_OBJECT_ID; id < PLAYER_OBJECT_ID; id++) {
     if (!used.has(id)) {
       return id;

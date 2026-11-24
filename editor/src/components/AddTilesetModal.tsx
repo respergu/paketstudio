@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { X, Image as ImageIcon, Plus, AlertCircle } from 'lucide-react';
 import { safeInvoke as invoke } from '../utils/ipc';
 import type { FileNode, TmxTileset } from '../types';
+import { getNextFirstGid } from '../utils/tmxParser';
 
 interface AddTilesetModalProps {
   isOpen: boolean;
@@ -54,12 +55,7 @@ export const AddTilesetModal: React.FC<AddTilesetModalProps> = ({
   }, [tmxFilePath]);
 
   // Next available firstgid
-  const nextFirstGid = useMemo(() => {
-    return existingTilesets.reduce(
-      (max, ts) => Math.max(max, ts.firstgid + ts.tilecount),
-      1
-    );
-  }, [existingTilesets]);
+  const nextFirstGid = useMemo(() => getNextFirstGid(existingTilesets), [existingTilesets]);
 
   // Reset form when modal opens
   useEffect(() => {
