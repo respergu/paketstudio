@@ -25,7 +25,13 @@ import { safeInvoke as invoke } from '../utils/ipc';
 import type { TmxData, TmxObject, TmxLayer, TmxTileset, PakObject, FileNode, Platform } from '../types';
 import type { ScreenGuidelines } from '../utils/screenAreas';
 import { isCpcPlatform } from '../utils/screenAreas';
-import { getNextAvailableObjectId } from '../utils/tmxParser';
+import {
+  getNextAvailableObjectId,
+  getPaketObjectId,
+  setPaketObjectId,
+  isObjectIdTaken
+} from '../utils/tmxParser';
+import { parentDir, isAbsolutePath } from '../utils/paths';
 import { COMMON_DIRECTIONS, PLAYER_OBJECT_ID } from '../constants';
 import { AddTilesetModal } from './AddTilesetModal';
 
@@ -137,12 +143,7 @@ export const RoomCanvas: React.FC<RoomCanvasProps> = ({
   const roomOriginY = viewMode === 'screen' ? (screenGuidelines.gameArea?.pixelY ?? 0) : 0;
 
   // Directory of active TMX file
-  const tmxDir = useMemo(() => {
-    if (!tmxFilePath) return '';
-    const parts = tmxFilePath.split('/');
-    parts.pop();
-    return parts.join('/');
-  }, [tmxFilePath]);
+  const tmxDir = useMemo(() => (tmxFilePath ? parentDir(tmxFilePath) : ''), [tmxFilePath]);
 
   // Load Tileset Images
   useEffect(() => {
@@ -159,11 +160,13 @@ export const RoomCanvas: React.FC<RoomCanvasProps> = ({
 
         // Candidate paths for tileset image
         const candidates: string[] = [];
-        if (src.startsWith('/')) {
+        if (isAbsolutePath(src)) {
           candidates.push(src);
         } else {
           if (tmxDir) {
-            candidates.push(`${projectPath}/${tmxDir}/${src}`);
+            // tmxFilePath is absolute, so this is the .tmx folder itself (tileset images,
+            // including those of resolved .tsx tilesets, are relative to it).
+            candidates.push(`${tmxDir}/${src}`);
           }
           candidates.push(`${projectPath}/${src}`);
           const match = files.find(f => f.name === src || f.relative_path.endsWith(`/${src}`));
@@ -433,7 +436,7 @@ export const RoomCanvas: React.FC<RoomCanvasProps> = ({
   // Synchronize ID draft state with selected object
   useEffect(() => {
     if (selectedObject) {
-      setIdDraft(selectedObject.id.toString());
+      setIdDraft(getPaketObjectId(selectedObject).toString());
       setIdError(null);
     } else {
       setIdDraft('');
@@ -646,7 +649,7 @@ export const RoomCanvas: React.FC<RoomCanvasProps> = ({
       for (const obj of sortedObjects) {
         const isSelected = obj.id === selectedObjectId;
         const isHovered = obj.id === hoveredObjectId;
-        const isPlayer = obj.id === PLAYER_OBJECT_ID || obj.name.toLowerCase() === 'player';
+        const isPlayer = getPaketObjectId(obj) === PLAYER_OBJECT_ID || obj.name.toLowerCase() === 'player';
 
         const objX = roomOriginX + obj.x;
         const objY = roomOriginY + obj.y;
@@ -704,7 +707,7 @@ export const RoomCanvas: React.FC<RoomCanvasProps> = ({
 
           // Name and ID Tag
           ctx.fillStyle = isSelected ? '#2563eb' : 'rgba(30, 41, 59, 0.85)';
-          const label = `#${obj.id} ${obj.name}`;
+          const label = `#${getPaketObjectId(obj)} ${obj.name}`;
           ctx.font = '10px monospace';
           const textW = ctx.measureText(label).width + 6;
           const textH = 14;
@@ -1025,13 +1028,14 @@ export const RoomCanvas: React.FC<RoomCanvasProps> = ({
         const nextId = getNextAvailableObjectId(tmxData.objects, false);
         let offset = 8;
         if (isCpc) offset = 8; // already even
-        const cloned: TmxObject = {
+        // setPaketObjectId: a copied ID property must not give the clone the original's ID.
+        const cloned: TmxObject = setPaketObjectId({
           ...selectedObject,
           id: nextId,
           x: Math.min(roomPixelWidth - selectedObject.width, selectedObject.x + offset),
           y: Math.min(roomPixelHeight - selectedObject.height, selectedObject.y + offset),
           depth: (selectedObject.depth ?? (selectedObject.y + selectedObject.height)) + offset
-        };
+        }, nextId);
         onAddObject(cloned);
         onSelectObjectId(nextId);
         onMarkDirty();
@@ -1433,9 +1437,9 @@ export const RoomCanvas: React.FC<RoomCanvasProps> = ({
         <div className="room-selected-object-bar">
           <div className="obj-bar-header">
             <div className="obj-bar-title">
-              {selectedObject.id === PLAYER_OBJECT_ID ? <User size={14} className="text-primary" /> : <Box size={14} className="text-accent" />}
+              {getPaketObjectId(selectedObject) === PLAYER_OBJECT_ID ? <User size={14} className="text-primary" /> : <Box size={14} className="text-accent" />}
               <span className="font-semibold">{selectedObject.name}</span>
-              <span className="obj-id-tag">ID: #{selectedObject.id}</span>
+              <span className="obj-id-tag">ID: #{getPaketObjectId(selectedObject)}</span>
               {isCpc && selectedObject.x % 2 !== 0 && (
                 <span className="obj-warning-badge" title="Amstrad CPC requires even X coordinates">
                   <AlertTriangle size={11} /> Odd X!
@@ -1488,22 +1492,22 @@ export const RoomCanvas: React.FC<RoomCanvasProps> = ({
                     return;
                   }
 
-                  const isDuplicate = tmxData.objects.some(o => o.id === val && o.id !== selectedObject.id);
-                  if (isDuplicate) {
+                  if (isObjectIdTaken(tmxData.objects, selectedObject, val)) {
                     setIdError(`ID ${val} already in use`);
                     return;
                   }
 
-                  // Valid & Unique!
+                  // Valid & Unique! Edits the object's ID property instead, if it has one.
                   setIdError(null);
                   const oldId = selectedObject.id;
-                  onCommitObjectChange({ ...selectedObject, id: val }, oldId);
-                  onSelectObjectId(val);
+                  const updated = setPaketObjectId(selectedObject, val);
+                  onCommitObjectChange(updated, oldId);
+                  onSelectObjectId(updated.id);
                   onMarkDirty();
                 }}
                 onBlur={() => {
                   if (idError || !idDraft.trim()) {
-                    setIdDraft(selectedObject.id.toString());
+                    setIdDraft(getPaketObjectId(selectedObject).toString());
                     setIdError(null);
                   }
                 }}
@@ -1638,13 +1642,13 @@ export const RoomCanvas: React.FC<RoomCanvasProps> = ({
                 className="btn btn-secondary btn-sm"
                 onClick={() => {
                   const nextId = getNextAvailableObjectId(tmxData.objects, false);
-                  const cloned: TmxObject = {
+                  const cloned: TmxObject = setPaketObjectId({
                     ...selectedObject,
                     id: nextId,
                     x: Math.min(roomPixelWidth - selectedObject.width, selectedObject.x + (isCpc ? 8 : 8)),
                     y: Math.min(roomPixelHeight - selectedObject.height, selectedObject.y + 8),
                     depth: (selectedObject.depth ?? (selectedObject.y + selectedObject.height)) + 8
-                  };
+                  }, nextId);
                   onAddObject(cloned);
                   onSelectObjectId(nextId);
                   onMarkDirty();
